@@ -16,12 +16,22 @@ export async function POST(request: Request) {
 
     const result = await checkInParticipant(query.trim(), {
       findParticipant: async (q) => {
-        const { data } = await supabase
+        // Try exact email match first, then partial name match
+        const { data: byEmail } = await supabase
           .from('participants')
           .select('*')
-          .or(`email.eq.${q},full_name.ilike.${q}`)
+          .eq('email', q)
           .maybeSingle()
-        return data ?? null
+        if (byEmail) return byEmail
+
+        // Partial case-insensitive name match — returns closest first
+        const { data: byName } = await supabase
+          .from('participants')
+          .select('*')
+          .ilike('full_name', `%${q}%`)
+          .limit(1)
+          .maybeSingle()
+        return byName ?? null
       },
       updateCheckedIn: async (id) => {
         await supabase

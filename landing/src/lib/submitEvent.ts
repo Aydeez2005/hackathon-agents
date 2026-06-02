@@ -42,52 +42,79 @@ function buildExtrasText(
   return parts.join('\n')
 }
 
-// ─── Excel / CSV parser ───────────────────────────────────────────────────────
+// ─── Participant parser ────────────────────────────────────────────────────────
 
 type ParticipantRow = {
   full_name: string
-  email: string
+  email: string | null
   phone: string
   linkedin: string
   role: string
+  job_title: string
+  member_id: string
+  meetup_profile_url: string
+  rsvp_status: string
 }
 
 function normalise(s: string): string {
-  return s.toLowerCase().replace(/[\s_\-]/g, '')
+  return s.toLowerCase().replace(/[\s_\-?]/g, '')
 }
 
-const COLUMN_MAP: Record<string, keyof ParticipantRow> = {
-  fullname: 'full_name',
+type ParticipantField = keyof ParticipantRow
+
+const COLUMN_MAP: Record<string, ParticipantField> = {
+  // name
   name: 'full_name',
+  fullname: 'full_name',
   participantname: 'full_name',
+  // email
   email: 'email',
   emailaddress: 'email',
+  // phone
   phone: 'phone',
   phonenumber: 'phone',
   mobile: 'phone',
   telephone: 'phone',
   tel: 'phone',
+  // linkedin
   linkedin: 'linkedin',
   linkedinprofile: 'linkedin',
   linkedinurl: 'linkedin',
   linkedinlink: 'linkedin',
+  whatisyourlinkedinprofile: 'linkedin',
+  // role (general)
   role: 'role',
-  title: 'role',
-  position: 'role',
-  jobtitle: 'role',
+  // job title (specific)
+  jobtitle: 'job_title',
+  whatisyourjobtitle: 'job_title',
+  title: 'job_title',
+  position: 'job_title',
+  // meetup-specific
+  memberid: 'member_id',
+  urlofmemberprofile: 'meetup_profile_url',
+  rsvp: 'rsvp_status',
+}
+
+function isHiddenEmail(val: string): boolean {
+  return val.toLowerCase().includes('email hidden') || val === ''
 }
 
 async function parseParticipantFile(file: File): Promise<ParticipantRow[]> {
   const buffer = await file.arrayBuffer()
-  const wb = XLSX.read(buffer, { type: 'array' })
+
+  // Detect delimiter: use semicolon if first line contains semicolons
+  const preview = new TextDecoder().decode(buffer.slice(0, 500))
+  const delimiter = preview.includes(';') ? ';' : ','
+
+  const wb = XLSX.read(buffer, { type: 'array', FS: delimiter })
   const ws = wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: '' })
 
   if (rows.length === 0) return []
 
-  // Map header names to our fields
+  // Map headers → our fields
   const headers = Object.keys(rows[0])
-  const colMapping: Partial<Record<string, keyof ParticipantRow>> = {}
+  const colMapping: Partial<Record<string, ParticipantField>> = {}
   for (const h of headers) {
     const mapped = COLUMN_MAP[normalise(h)]
     if (mapped) colMapping[h] = mapped
@@ -95,13 +122,29 @@ async function parseParticipantFile(file: File): Promise<ParticipantRow[]> {
 
   return rows
     .map((row) => {
-      const p: ParticipantRow = { full_name: '', email: '', phone: '', linkedin: '', role: '' }
+      const p: ParticipantRow = {
+        full_name: '',
+        email: null,
+        phone: '',
+        linkedin: '',
+        role: '',
+        job_title: '',
+        member_id: '',
+        meetup_profile_url: '',
+        rsvp_status: '',
+      }
       for (const [header, field] of Object.entries(colMapping)) {
-        if (field) p[field] = String(row[header] ?? '').trim()
+        if (!field) continue
+        const val = String(row[header] ?? '').trim()
+        if (field === 'email') {
+          p.email = isHiddenEmail(val) ? null : val
+        } else {
+          (p as Record<string, unknown>)[field] = val
+        }
       }
       return p
     })
-    .filter((p) => p.full_name && p.email)
+    .filter((p) => p.full_name) // must have at least a name
 }
 
 // ─── main submit function ─────────────────────────────────────────────────────
@@ -149,9 +192,13 @@ export async function submitEvent(formData: EventFormData): Promise<void> {
     const participants = await parseParticipantFile(formData.participantList.file)
 
     if (participants.length > 0) {
+      // Use member_id as upsert key when available (Meetup exports), fall back to email
+      const hasMemberIds = participants.some((p) => p.member_id)
+      const conflictColumn = hasMemberIds ? 'member_id' : 'email'
+
       const { error: participantsError } = await supabase
         .from('participants')
-        .upsert(participants, { onConflict: 'email', ignoreDuplicates: false })
+        .upsert(participants, { onConflict: conflictColumn, ignoreDuplicates: false })
 
       if (participantsError) {
         throw new Error(`Failed to save participants: ${participantsError.message}`)

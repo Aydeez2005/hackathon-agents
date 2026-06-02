@@ -8,10 +8,14 @@ create extension if not exists "pgcrypto";
 create table if not exists participants (
   id                   uuid        primary key default gen_random_uuid(),
   full_name            text        not null,
-  email                text        unique not null,
+  email                text,                          -- nullable: Meetup hides emails
   phone                text        not null default '',
   linkedin             text,
-  role                 text        not null default '',
+  role                 text        not null default '', -- general category (Developer, Founder…)
+  job_title            text        not null default '', -- specific title from "What is your job title?"
+  member_id            text,                           -- Meetup member ID, used as import key
+  meetup_profile_url   text,
+  rsvp_status          text        not null default '', -- Yes / Waiting List / No
   attendance_confirmed boolean     not null default false,
   checked_in           boolean     not null default false,
   checked_in_at        timestamptz,
@@ -20,10 +24,17 @@ create table if not exists participants (
   created_at           timestamptz not null default now()
 );
 
+-- Unique email only when it is a real address (not hidden by Meetup)
+create unique index if not exists participants_email_unique
+  on participants (email)
+  where email is not null and email not like 'Email hidden%';
+
+-- Unique member_id when present
+create unique index if not exists participants_member_id_unique
+  on participants (member_id)
+  where member_id is not null and member_id != '';
+
 -- ─── event_config ─────────────────────────────────────────────────────────────
--- Single-row table. Row id=1 always.
--- text columns (agenda / location / extras) are used by the check-in briefing agent.
--- All rich form data lives in the `config` jsonb column.
 create table if not exists event_config (
   id                    int         primary key default 1,
 
@@ -53,7 +64,7 @@ create table if not exists event_config (
   check_in_instructions text        not null default '',
   wifi_info             text        not null default '',
 
-  -- structured data as jsonb
+  -- structured data
   agenda_blocks         jsonb       not null default '[]',
   food_drinks           jsonb       not null default '{}',
   logistics_info        jsonb       not null default '{}',
@@ -69,9 +80,23 @@ create unique index if not exists event_config_singleton on event_config ((id));
 
 insert into event_config (id) values (1) on conflict (id) do nothing;
 
--- ─── migrations: add columns if upgrading from old schema ─────────────────────
+-- ─── migrations (safe to run on existing DB) ──────────────────────────────────
 do $$
 begin
+  -- participants: new columns
+  if not exists (select 1 from information_schema.columns where table_name='participants' and column_name='member_id') then
+    alter table participants
+      add column member_id          text,
+      add column job_title          text not null default '',
+      add column meetup_profile_url text,
+      add column rsvp_status        text not null default '';
+  end if;
+
+  -- participants: make email and phone nullable
+  alter table participants alter column email drop not null;
+  alter table participants alter column phone set default '';
+
+  -- event_config: new columns
   if not exists (select 1 from information_schema.columns where table_name='event_config' and column_name='event_name') then
     alter table event_config
       add column event_name            text not null default '',
