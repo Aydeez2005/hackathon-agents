@@ -11,7 +11,7 @@ interface FinalNotesSectionProps {
 }
 
 export function FinalNotesSection({ form }: FinalNotesSectionProps) {
-  const { formData, updateFinalNotes, touchField, getError, validateAndSubmit } = form
+  const { formData, updateFinalNotes, touchField, getError, validateAndSubmit, isSubmitting, submitError } = form
   const { finalNotes } = formData
 
   return (
@@ -46,13 +46,17 @@ export function FinalNotesSection({ form }: FinalNotesSectionProps) {
             <FieldError message={getError('finalNotes.confirmedComplete')} />
           </div>
 
+          {submitError && (
+            <p className="text-sm text-red-600">{submitError}</p>
+          )}
+
           <Button
             size="lg"
             className="w-full sm:w-auto"
-            disabled={!finalNotes.confirmedComplete}
+            disabled={!finalNotes.confirmedComplete || isSubmitting}
             onClick={validateAndSubmit}
           >
-            Submit event information
+            {isSubmitting ? 'Saving…' : 'Submit event information'}
           </Button>
         </div>
       </Card>

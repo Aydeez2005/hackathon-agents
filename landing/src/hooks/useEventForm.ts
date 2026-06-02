@@ -1,9 +1,9 @@
 import { useCallback, useState } from 'react'
+import { submitEvent } from '../lib/submitEvent'
 import {
   createAgendaBlock,
   createFaqItem,
   createInitialFormData,
-  serializeEventForm,
   type AgendaBlock,
   type EventFormData,
   type FaqItem,
@@ -22,6 +22,8 @@ export function useEventForm() {
   const [errors, setErrors] = useState<FormErrors>({})
   const [touched, setTouched] = useState<Record<string, boolean>>({})
   const [isSubmitted, setIsSubmitted] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   const updateBasics = useCallback(
     <K extends keyof EventFormData['basics']>(field: K, value: EventFormData['basics'][K]) => {
@@ -169,7 +171,7 @@ export function useEventForm() {
     [errors, touched],
   )
 
-  const validateAndSubmit = useCallback(() => {
+  const validateAndSubmit = useCallback(async () => {
     const result = validateEventForm(formData)
     setErrors(result.errors)
     setTouched(
@@ -184,11 +186,19 @@ export function useEventForm() {
       return false
     }
 
-    const payload = serializeEventForm(formData)
-    console.log('Event form submitted:', payload)
-    setIsSubmitted(true)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-    return true
+    setIsSubmitting(true)
+    setSubmitError(null)
+    try {
+      await submitEvent(formData)
+      setIsSubmitted(true)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      return true
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Submission failed. Please try again.')
+      return false
+    } finally {
+      setIsSubmitting(false)
+    }
   }, [formData])
 
   const resetSubmitted = useCallback(() => {
@@ -199,6 +209,8 @@ export function useEventForm() {
     formData,
     errors,
     isSubmitted,
+    isSubmitting,
+    submitError,
     updateBasics,
     updateVenue,
     updateFoodDrinks,
