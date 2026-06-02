@@ -1,0 +1,17 @@
+[
+  { "id": "00000000-0000-0000-0000-000000000001", "full_name": "Anna Müller", "role": "developer", "team_id": null },
+  { "id": "00000000-0000-0000-0000-000000000002", "full_name": "Max Weber", "role": "founder", "team_id": null },
+  { "id": "00000000-0000-0000-0000-000000000003", "full_name": "Tim Bauer", "role": "marketing", "team_id": null },
+  { "id": "00000000-0000-0000-0000-000000000004", "full_name": "Sofia Klein", "role": "designer", "team_id": null },
+  { "id": "00000000-0000-0000-0000-000000000005", "full_name": "Jonas Fischer", "role": "developer", "team_id": null },
+  { "id": "00000000-0000-0000-0000-000000000006", "full_name": "Maya Schneider", "role": "founder", "team_id": null },
+  { "id": "00000000-0000-0000-0000-000000000007", "full_name": "Noah Wagner", "role": "marketing", "team_id": null },
+  { "id": "00000000-0000-0000-0000-000000000008", "full_name": "Paul Neumann", "role": "designer", "team_id": null },
+  { "id": "00000000-0000-0000-0000-000000000009", "full_name": "Lea Hoffmann", "role": "developer", "team_id": null },
+  { "id": "00000000-0000-0000-0000-00000000000a", "full_name": "Felix Becker", "role": "founder", "team_id": null },
+  { "id": "00000000-0000-0000-0000-00000000000b", "full_name": "Emma Richter", "role": "marketing", "team_id": null },
+  { "id": "00000000-0000-0000-0000-00000000000c", "full_name": "Clara Neumann", "role": "designer", "team_id": null },
+  { "id": "00000000-0000-0000-0000-00000000000d", "full_name": "David Schmidt", "role": "developer", "team_id": null },
+  { "id": "00000000-0000-0000-0000-00000000000e", "full_name": "Lukas Hering", "role": "founder", "team_id": null },
+  { "id": "00000000-0000-0000-0000-00000000000f", "full_name": "Nina Koch", "role": "marketing", "team_id": null }
+]

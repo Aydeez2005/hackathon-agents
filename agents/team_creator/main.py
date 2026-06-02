@@ -1,105 +1,160 @@
 #!/usr/bin/env python3
-"""Team Creator Agent – reads participants, outputs balanced teams."""
+"""Team Creator Agent – Supabase participants → balanced teams → team_id write-back."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 import pandas as pd
+from dotenv import load_dotenv
+from supabase import Client, create_client
 
-LEVEL_RANK = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
-SKILLS = ["Frontend", "Backend", "Design", "Product", "AI", "Data", "GTM"]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ROLE_BUCKETS = ("developer", "founder", "marketing", "wildcard")
+ROLE_ALIASES = {
+    "developer": {"developer", "dev", "engineer", "backend", "frontend"},
+    "founder": {"founder", "product"},
+    "marketing": {"marketing", "marketer", "gtm", "sales"},
+}
 
 
-def load_participants(path: Path) -> pd.DataFrame:
-    suffix = path.suffix.lower()
-    if suffix in {".xlsx", ".xls", ".csv"}:
-        if suffix == ".csv":
-            df = pd.read_csv(path)
-        else:
-            df = pd.read_excel(path)
-    elif suffix == ".pdf":
-        # Minimal PDF support: one line per person, "Name | Experience"
-        from pypdf import PdfReader
+def load_env() -> None:
+    load_dotenv(PROJECT_ROOT / ".env.local")
+    load_dotenv(PROJECT_ROOT / ".env")
 
-        reader = PdfReader(str(path))
-        rows = []
-        for page in reader.pages:
-            for line in page.extract_text().splitlines():
-                line = line.strip()
-                if not line or "|" not in line:
-                    continue
-                name, experience = [part.strip() for part in line.split("|", 1)]
-                rows.append({"Name": name, "Experience": experience})
-        df = pd.DataFrame(rows)
-    else:
-        raise ValueError(f"Unsupported file type: {suffix}")
 
-    if "Name" not in df.columns:
-        raise ValueError("Input must contain a 'Name' column")
+def get_supabase_client() -> Client:
+    url = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        raise RuntimeError(
+            "Missing Supabase env vars. Set NEXT_PUBLIC_SUPABASE_URL and "
+            "SUPABASE_SERVICE_ROLE_KEY in .env.local"
+        )
+    return create_client(url, key)
 
-    experience_col = next(
-        (c for c in df.columns if c.lower() in {"experience", "erfahrung"}),
-        None,
+
+def normalize_role(role: str) -> str:
+    value = role.strip().lower()
+    for bucket, aliases in ROLE_ALIASES.items():
+        if value == bucket or value in aliases:
+            return bucket
+    return "wildcard"
+
+
+def fetch_participants(client: Client) -> list[dict]:
+    response = (
+        client.table("participants")
+        .select("id, full_name, role, team_id")
+        .order("full_name")
+        .execute()
     )
-    if experience_col is None:
-        raise ValueError("Input must contain 'Experience' or 'Erfahrung'")
-
-    df = df.rename(columns={experience_col: "Experience"})
-    return df[["Name", "Experience"] + [c for c in df.columns if c not in {"Name", "Experience"}]]
+    return response.data or []
 
 
-def score_participant(row: pd.Series) -> int:
-    level = str(row.get("Level", "Intermediate"))
-    return LEVEL_RANK.get(level, 2)
+def load_participants_from_json(path: Path) -> list[dict]:
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(rows, list):
+        raise ValueError("JSON input must be a list of participant objects")
 
-
-def primary_skill(row: pd.Series) -> str:
-    skill = str(row.get("Primary Skill", "")).strip()
-    return skill if skill in SKILLS else "Other"
-
-
-def create_teams(df: pd.DataFrame, team_size: int = 3) -> list[dict]:
-    working = df.copy()
-    working["_score"] = working.apply(score_participant, axis=1)
-    working["_skill"] = working.apply(primary_skill, axis=1)
-
-    # Snake draft: strong participants spread across teams
-    ordered = working.sort_values("_score", ascending=False)
-    num_teams = max(1, round(len(ordered) / team_size))
-    teams: list[list[dict]] = [[] for _ in range(num_teams)]
-
-    for idx, (_, row) in enumerate(ordered.iterrows()):
-        team_idx = idx % num_teams if (idx // num_teams) % 2 == 0 else num_teams - 1 - (idx % num_teams)
-        teams[team_idx].append(
+    participants = []
+    for row in rows:
+        if "full_name" not in row or "role" not in row:
+            raise ValueError("Each participant needs full_name and role")
+        participants.append(
             {
-                "name": row["Name"],
-                "experience": row["Experience"],
-                "level": row.get("Level"),
-                "primary_skill": row.get("Primary Skill"),
+                "id": row.get("id"),
+                "full_name": row["full_name"],
+                "role": row["role"],
+                "team_id": row.get("team_id"),
             }
         )
+    return participants
+
+
+def create_teams(participants: list[dict], team_size: int = 4) -> list[dict]:
+    if not participants:
+        return []
+
+    buckets: dict[str, list[dict]] = {role: [] for role in ROLE_BUCKETS}
+    for participant in participants:
+        buckets[normalize_role(participant["role"])].append(participant)
+
+    for bucket in buckets.values():
+        bucket.sort(key=lambda p: p["full_name"].lower())
+
+    teams: list[list[dict]] = []
+
+    while all(len(bucket) > 0 for bucket in buckets.values()):
+        teams.append(
+            [
+                buckets["developer"].pop(0),
+                buckets["founder"].pop(0),
+                buckets["marketing"].pop(0),
+                buckets["wildcard"].pop(0),
+            ]
+        )
+
+    leftovers = (
+        buckets["developer"]
+        + buckets["founder"]
+        + buckets["marketing"]
+        + buckets["wildcard"]
+    )
+
+    if not teams:
+        num_teams = max(1, round(len(leftovers) / team_size))
+        teams = [[] for _ in range(num_teams)]
+        for idx, participant in enumerate(leftovers):
+            teams[idx % num_teams].append(participant)
+    else:
+        for idx, participant in enumerate(leftovers):
+            teams[idx % len(teams)].append(participant)
 
     result = []
-    for i, members in enumerate(teams, start=1):
-        skills = [m.get("primary_skill") for m in members if m.get("primary_skill")]
+    for index, members in enumerate(teams, start=1):
+        team_id = f"team-{index}"
         result.append(
             {
-                "team_id": f"team-{i}",
-                "team_name": f"Team {i}",
-                "members": members,
-                "skills": skills,
-                "avg_level_score": round(
-                    sum(LEVEL_RANK.get(str(m.get("level") or "Intermediate"), 2) for m in members)
-                    / max(len(members), 1),
-                    2,
-                ),
+                "team_id": team_id,
+                "members": [
+                    {
+                        "id": member["id"],
+                        "full_name": member["full_name"],
+                        "role": member["role"],
+                        "team_id": team_id,
+                    }
+                    for member in members
+                ],
             }
         )
     return result
+
+
+def write_team_ids(client: Client, teams: list[dict]) -> None:
+    for team in teams:
+        for member in team["members"]:
+            if not member.get("id"):
+                continue
+            client.table("participants").update({"team_id": team["team_id"]}).eq(
+                "id", member["id"]
+            ).execute()
+
+
+def build_result(participants: list[dict], teams: list[dict]) -> dict:
+    return {
+        "success": True,
+        "message": f"Created {len(teams)} teams for {len(participants)} participants.",
+        "data": {
+            "participant_count": len(participants),
+            "team_count": len(teams),
+            "teams": teams,
+        },
+    }
 
 
 def teams_to_rows(teams: list[dict]) -> list[dict]:
@@ -108,12 +163,9 @@ def teams_to_rows(teams: list[dict]) -> list[dict]:
         for member in team["members"]:
             rows.append(
                 {
-                    "Team": team["team_name"],
-                    "Team ID": team["team_id"],
-                    "Name": member["name"],
-                    "Experience": member["experience"],
-                    "Level": member.get("level"),
-                    "Primary Skill": member.get("primary_skill"),
+                    "team_id": team["team_id"],
+                    "full_name": member["full_name"],
+                    "role": member["role"],
                 }
             )
     return rows
@@ -124,11 +176,9 @@ def write_teams_excel(teams: list[dict], path: Path) -> None:
     summary_df = pd.DataFrame(
         [
             {
-                "Team": team["team_name"],
-                "Team ID": team["team_id"],
-                "Members": len(team["members"]),
-                "Skills": ", ".join(team["skills"]),
-                "Avg Level Score": team["avg_level_score"],
+                "team_id": team["team_id"],
+                "members": len(team["members"]),
+                "roles": ", ".join(member["role"] for member in team["members"]),
             }
             for team in teams
         ]
@@ -143,10 +193,15 @@ def write_teams_excel(teams: list[dict], path: Path) -> None:
 def main() -> None:
     default_excel = Path.home() / "Desktop" / "EventOS_teams.xlsx"
 
-    parser = argparse.ArgumentParser(description="Create balanced hackathon teams")
-    parser.add_argument("--input", "-i", required=True, type=Path, help="Excel/CSV/PDF with participants")
-    parser.add_argument("--team-size", "-s", type=int, default=3, help="Target team size")
-    parser.add_argument("--output", "-o", type=Path, help="Write JSON result to file")
+    parser = argparse.ArgumentParser(description="Create balanced hackathon teams from Supabase")
+    parser.add_argument(
+        "--input",
+        "-i",
+        type=Path,
+        help="Optional local JSON test file with Supabase-shaped participants",
+    )
+    parser.add_argument("--team-size", "-s", type=int, default=4, help="Target team size")
+    parser.add_argument("--output", "-o", type=Path, help="Write API-style JSON result to file")
     parser.add_argument(
         "--excel",
         "-x",
@@ -154,22 +209,42 @@ def main() -> None:
         nargs="?",
         const=default_excel,
         default=default_excel,
-        help="Write Excel result (default: ~/Desktop/EventOS_teams.xlsx). Pass a path to override.",
+        help="Write Excel result (default: ~/Desktop/EventOS_teams.xlsx)",
     )
     parser.add_argument("--no-excel", action="store_true", help="Skip Excel export")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Do not write team_id values back to Supabase",
+    )
     args = parser.parse_args()
 
-    if not args.input.exists():
-        print(f"File not found: {args.input}", file=sys.stderr)
+    load_env()
+
+    try:
+        if args.input:
+            if not args.input.exists():
+                raise FileNotFoundError(f"File not found: {args.input}")
+            participants = load_participants_from_json(args.input)
+            client = None
+        else:
+            client = get_supabase_client()
+            participants = fetch_participants(client)
+    except (RuntimeError, FileNotFoundError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
         sys.exit(1)
 
-    df = load_participants(args.input)
-    teams = create_teams(df, team_size=args.team_size)
-    payload = {
-        "participant_count": len(df),
-        "team_count": len(teams),
-        "teams": teams,
-    }
+    if not participants:
+        payload = {
+            "success": False,
+            "message": "No participants found.",
+            "data": {"participant_count": 0, "team_count": 0, "teams": []},
+        }
+    else:
+        teams = create_teams(participants, team_size=args.team_size)
+        if client and not args.dry_run:
+            write_team_ids(client, teams)
+        payload = build_result(participants, teams)
 
     text = json.dumps(payload, indent=2, ensure_ascii=False)
     if args.output:
@@ -178,8 +253,8 @@ def main() -> None:
     else:
         print(text)
 
-    if not args.no_excel:
-        write_teams_excel(teams, args.excel)
+    if not args.no_excel and payload.get("data", {}).get("teams"):
+        write_teams_excel(payload["data"]["teams"], args.excel)
         print(f"Wrote {args.excel}")
 
 
