@@ -20,7 +20,7 @@ function App() {
       <HeroSection />
 
       {form.isSubmitted ? (
-        <SuccessState onEdit={form.resetSubmitted} />
+        <SuccessState onEdit={form.resetSubmitted} checkinUrl={`${import.meta.env.VITE_APP_URL ?? 'http://localhost:3000'}/checkin`} />
       ) : (
         <PageLayout>
           <EventBasicsSection form={form} />
