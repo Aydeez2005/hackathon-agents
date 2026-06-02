@@ -1,4 +1,5 @@
 export const EVENT_TYPES = [
+  { value: 'hackathon', label: 'Hackathon' },
   { value: 'conference', label: 'Conference' },
   { value: 'workshop', label: 'Workshop' },
   { value: 'meetup', label: 'Meetup' },
