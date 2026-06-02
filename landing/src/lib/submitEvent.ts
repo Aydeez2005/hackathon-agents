@@ -192,13 +192,12 @@ export async function submitEvent(formData: EventFormData): Promise<void> {
     const participants = await parseParticipantFile(formData.participantList.file)
 
     if (participants.length > 0) {
-      // Use member_id as upsert key when available (Meetup exports), fall back to email
-      const hasMemberIds = participants.some((p) => p.member_id)
-      const conflictColumn = hasMemberIds ? 'member_id' : 'email'
+      // Clear existing participants and re-insert fresh from the uploaded file
+      await supabase.from('participants').delete().neq('id', '00000000-0000-0000-0000-000000000000')
 
       const { error: participantsError } = await supabase
         .from('participants')
-        .upsert(participants, { onConflict: conflictColumn, ignoreDuplicates: false })
+        .insert(participants)
 
       if (participantsError) {
         throw new Error(`Failed to save participants: ${participantsError.message}`)
